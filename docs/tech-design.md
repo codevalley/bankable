@@ -1,90 +1,78 @@
-## Family Bank - Backend Architecture & Design (MVP)
+Okay, I've updated the "Backend Architecture & Design" document to strictly follow the Clean Architecture directory structure and principles you provided.
+
+Here is the updated document in Markdown format:
+
+---
+
+## Family Bank - Backend Architecture & Design (MVP v4)
 
 ### 1. Introduction
 
-This document outlines the backend architecture, data model, and technology stack for the Family Bank MVP. It follows the Clean Architecture principles and focuses on building a robust, maintainable, and testable API-first service.
+This document outlines the backend architecture, data model, and technology stack for the Family Bank MVP (v4). It strictly follows the Clean Architecture principles and the specific project structure provided, focusing on building a robust, maintainable, and testable API-first service incorporating P2P transfers with approval. The core idea is the strict separation of contracts/interfaces (Core) from concrete implementations (Infrastructure).
 
 ### 2. Core Domain Entities
 
-These represent the fundamental concepts within the Family Bank domain for the MVP.
+Defined within `src/core/domain/`. These are plain data structures representing the fundamental concepts.
 
-* **`Family`**: Represents a single family unit using the system.
-    * `id`: UUID (Primary Key)
-    * `name`: String (e.g., "Smith Family")
-    * `currency_name`: String (e.g., "Points", "Stars", "Family $") - Default: "Points"
-    * `created_at`: TimestampTZ
-* **`User`**: Represents an individual within a family.
-    * `id`: UUID (Primary Key)
-    * `family_id`: UUID (Foreign Key to `Family`)
-    * `name`: String (e.g., "Alice", "Dad")
-    * `role`: Enum (`PARENT`, `CHILD`)
-    * `email`: String (Unique, Indexed, for Parent login) - Nullable for Child
-    * `hashed_password`: String - Nullable for Child
-    * `created_at`: TimestampTZ
-* **`Account`**: Represents the financial account holding the balance for a Child.
-    * `id`: UUID (Primary Key)
-    * `user_id`: UUID (Foreign Key to `User`, Unique - One account per Child user)
-    * `family_id`: UUID (Foreign Key to `Family`, Indexed)
-    * `balance`: Decimal (High precision, e.g., NUMERIC(12, 2))
-    * `updated_at`: TimestampTZ
-* **`Product`**: Represents a defined way to earn or spend currency.
-    * `id`: UUID (Primary Key)
-    * `family_id`: UUID (Foreign Key to `Family`, Indexed)
-    * `name`: String (e.g., "Clean Room", "1 Hour Screen Time")
-    * `description`: Text (Optional)
-    * `type`: Enum (`EARN`, `SPEND`)
-    * `amount`: Decimal (High precision, positive value represents reward for EARN, cost for SPEND)
-    * `is_active`: Boolean (For soft delete) - Default: True
-    * `created_at`: TimestampTZ
-    * `updated_at`: TimestampTZ
-* **`Transaction`**: Records every change to an Account balance. Designed for immutability once Approved/Rejected/Cancelled.
-    * `id`: UUID (Primary Key)
-    * `account_id`: UUID (Foreign Key to `Account`, Indexed)
-    * `user_id`: UUID (Foreign Key to `User` - Child user associated with the account)
-    * `family_id`: UUID (Foreign Key to `Family`, Indexed)
-    * `product_id`: UUID (Foreign Key to `Product`, Nullable for manual adjustments/reversals)
-    * `type`: Enum (`EARN`, `SPEND`, `ADJUSTMENT`, `REVERSAL`) - Indexed
-    * `status`: Enum (`PENDING`, `APPROVED`, `REJECTED`, `CANCELLED`) - Indexed
-    * `amount`: Decimal (The amount of the transaction; matches Product amount or adjustment value)
-    * `balance_before`: Decimal (Account balance *before* this transaction was approved) - For auditing
-    * `balance_after`: Decimal (Account balance *after* this transaction was approved) - For auditing
-    * `description`: Text (e.g., Product name, Parent's reason for adjustment/reversal/modification)
-    * `created_at`: TimestampTZ (When the request/log was initiated) - Indexed
-    * `processed_at`: TimestampTZ (When status changed from PENDING) - Nullable
-    * `processed_by_user_id`: UUID (Foreign Key to `User` - Parent who approved/rejected/cancelled) - Nullable
+* **`Family`** (`family.py`): Represents a single family unit.
+    * `id`, `name`, `currency_name`, `created_at`
+* **`User`** (`user.py`): Represents an individual within a family.
+    * `id`, `family_id`, `name`, `role` (PARENT/CHILD), `email`, `hashed_password`, `created_at`
+* **`Account`** (`account.py`): Represents the financial account for a Child.
+    * `id`, `user_id` (CHILD), `family_id`, `balance`, `updated_at`
+* **`Product`** (`product.py`): Represents a defined way to earn or spend currency.
+    * `id`, `family_id`, `name`, `description`, `type` (EARN/SPEND), `amount`, `is_active`, `created_at`, `updated_at`
+* **`Transaction`** (`transaction.py`): Records requests and outcomes of balance changes.
+    * `id`: UUID (PK)
+    * `account_id`: UUID (FK to Account - *Primary* account involved)
+    * `related_account_id`: UUID (FK to Account - *Secondary* account involved, e.g., recipient for TRANSFER) - Nullable
+    * `user_id`: UUID (FK to User - Child user associated with `account_id`)
+    * `family_id`: UUID (FK to Family)
+    * `product_id`: UUID (FK to Product) - Nullable
+    * `type`: Enum (`EARN`, `SPEND`, `ADJUSTMENT`, `REVERSAL`, `TRANSFER`)
+    * `status`: Enum (`PENDING`, `APPROVED`, `REJECTED`, `CANCELLED`)
+    * `amount`: Decimal
+    * `balance_before`: Decimal
+    * `balance_after`: Decimal
+    * `related_balance_before`: Decimal (Nullable)
+    * `related_balance_after`: Decimal (Nullable)
+    * `description`: Text
+    * `created_at`: TimestampTZ (Request time)
+    * `processed_at`: TimestampTZ (Nullable)
+    * `processed_by_user_id`: UUID (FK to User - Parent who processed) - Nullable
+* **Common Enums** (`common_enums.py`): Defines `UserRole`, `ProductType`, `TransactionType`, `TransactionStatus`.
 
-### 3. API Endpoints (MVP)
+### 3. API Endpoints (MVP v4)
 
-These endpoints provide the interface to the backend service. Authentication (Bearer Token) is required for all endpoints except `/auth/token` and potentially `POST /families`. Parent role is required for most management actions.
+Defined within `src/api/routes/`. Authentication required (except auth/family creation). Parent role required for management.
 
-| Method | Path                                       | Description                                                    | Key Request Body / Query Params                      | Key Response Body               |
-| :----- | :----------------------------------------- | :------------------------------------------------------------- | :--------------------------------------------------- | :------------------------------ |
-| POST   | `/auth/token`                              | Parent Login (Get JWT)                                         | `username` (email), `password`                       | `access_token`, `token_type`    |
-| POST   | `/families`                                | Register new Family and first Parent                           | `familyName`, `currencyName`, `parentName`, `email`, `password` | `FamilyReadDTO`, `UserReadDTO`  |
-| POST   | `/families/me/children`                    | Parent adds a Child                                            | `name`                                               | `UserReadDTO`, `AccountReadDTO` |
-| GET    | `/families/me/children`                    | Parent lists all Children in their family                      | -                                                    | List[`UserReadDTO`]             |
-| GET    | `/children/{child_id}`                     | Parent gets details for a specific Child (incl. balance)       | -                                                    | `UserReadDTO`, `AccountReadDTO` |
-| POST   | `/children/{child_id}/adjust-balance`      | Parent manually adjusts Child balance                          | `amount` (positive/negative), `description`          | `TransactionReadDTO`            |
-| POST   | `/families/me/products`                    | Parent defines a new Product (Earn/Spend)                      | `ProductCreateDTO`                                   | `ProductReadDTO`                |
-| GET    | `/families/me/products`                    | Parent lists active Products                                   | `?type=EARN` or `?type=SPEND` (optional filter)      | List[`ProductReadDTO`]          |
-| GET    | `/products/{product_id}`                   | Parent gets details of a specific Product                      | -                                                    | `ProductReadDTO`                |
-| PUT    | `/products/{product_id}`                   | Parent updates a Product                                       | `ProductUpdateDTO`                                   | `ProductReadDTO`                |
-| DELETE | `/products/{product_id}`                   | Parent deletes (soft) a Product                                | -                                                    | Status 204 No Content           |
-| POST   | `/transactions/request-earn`               | Log completion of an "Earn" Product                            | `childUserId`, `productId`, `description` (optional)   | `TransactionReadDTO` (Pending)  |
-| POST   | `/transactions/request-spend`              | Log request for a "Spend" Product                              | `childUserId`, `productId`, `description` (optional)   | `TransactionReadDTO` (Pending)  |
-| GET    | `/families/me/transactions/pending`        | Parent lists all Pending transactions                          | -                                                    | List[`TransactionReadDTO`]      |
-| POST   | `/transactions/{transaction_id}/approve`   | Parent approves a Pending transaction                          | `description` (optional override)                    | `TransactionReadDTO` (Approved) |
-| POST   | `/transactions/{transaction_id}/reject`    | Parent rejects a Pending transaction                           | `description` (reason for rejection)                 | `TransactionReadDTO` (Rejected) |
-| POST   | `/transactions/{transaction_id}/cancel`    | Parent cancels an Approved transaction (creates reversal)      | `description` (reason for cancellation)              | `TransactionReadDTO` (Reversal) |
-| GET    | `/children/{child_id}/transactions`        | Get transaction history for a Child                            | `?startDate=...&endDate=...&type=...` (optional filters) | List[`TransactionReadDTO`]      |
-| GET    | `/transactions/{transaction_id}`           | Get details of a specific Transaction                          | -                                                    | `TransactionReadDTO`            |
-| PUT    | `/transactions/{transaction_id}`           | Parent modifies a *Pending* transaction                        | `description`, `amount` (only if needed)             | `TransactionReadDTO` (Pending)  |
-
-*(Note: DTO definitions implied, e.g., `ProductCreateDTO` would contain `name`, `type`, `amount`, etc.)*
+| Method | Path                                         | Description                                                              | Controller File (Suggestion) |
+| :----- | :------------------------------------------- | :----------------------------------------------------------------------- | :--------------------------- |
+| POST   | `/auth/token`                                | Parent Login                                                             | `auth_routes.py`             |
+| POST   | `/families`                                  | Register Family & Parent                                                 | `family_routes.py`           |
+| POST   | `/families/me/children`                      | Add Child                                                                | `user_routes.py`             |
+| GET    | `/families/me/children`                      | List Children                                                            | `user_routes.py`             |
+| GET    | `/children/{child_id}`                       | Get Child Details & Balance                                              | `user_routes.py`             |
+| POST   | `/children/{child_id}/adjust-balance`        | Manually Adjust Balance                                                  | `transaction_routes.py`      |
+| POST   | `/families/me/products`                      | Define Product                                                           | `product_routes.py`          |
+| GET    | `/families/me/products`                      | List Products                                                            | `product_routes.py`          |
+| GET    | `/products/{product_id}`                     | Get Product Details                                                      | `product_routes.py`          |
+| PUT    | `/products/{product_id}`                     | Update Product                                                           | `product_routes.py`          |
+| DELETE | `/products/{product_id}`                     | Delete (soft) Product                                                    | `product_routes.py`          |
+| POST   | `/transactions/request-earn`                 | Log Task Completion                                                      | `transaction_routes.py`      |
+| POST   | `/transactions/request-spend`                | Request Privilege Use                                                    | `transaction_routes.py`      |
+| POST   | `/transactions/request-transfer`             | Request P2P Transfer                                                     | `transaction_routes.py`      |
+| GET    | `/families/me/transactions/pending`          | List Pending Transactions                                                | `transaction_routes.py`      |
+| POST   | `/transactions/{transaction_id}/approve`     | Approve Pending Txn (Earn/Spend/Transfer)                                | `transaction_routes.py`      |
+| POST   | `/transactions/{transaction_id}/reject`      | Reject Pending Txn                                                       | `transaction_routes.py`      |
+| POST   | `/transactions/{transaction_id}/cancel`      | Cancel Approved Txn (Creates Reversal)                                   | `transaction_routes.py`      |
+| GET    | `/children/{child_id}/transactions`          | Get Child Transaction History (`?startDate=...&endDate=...&type=...`)    | `transaction_routes.py`      |
+| GET    | `/transactions/{transaction_id}`             | Get Specific Transaction Details                                         | `transaction_routes.py`      |
+| PUT    | `/transactions/{transaction_id}`             | Modify *Pending* Transaction                                             | `transaction_routes.py`      |
 
 ### 4. System Architecture
 
-A standard layered web service architecture:
+A standard layered web service architecture following Clean Architecture principles:
 
 ```mermaid
 graph LR
@@ -97,29 +85,29 @@ graph LR
     end
 
     subgraph "Backend Service (Containerized - e.g., Docker)"
-        subgraph "API Layer (FastAPI)"
-            API(FastAPI App) --> Middle(Middleware: Auth, CORS, Logging)
-            Middle --> Routes(API Routers / Endpoints)
+        subgraph "API Layer (src/api)"
+            API(FastAPI App - main.py) --> Middle(Middleware - middleware/)
+            Middle --> Routes(API Routers - routes/)
         end
 
-        subgraph "Application Layer"
-            UseCases(Use Cases / Application Logic)
+        subgraph "Application Layer (src/application)"
+            UseCases(Use Cases / Application Logic - use_cases/)
         end
 
-        subgraph "Core Layer"
-            Domain(Domain Entities)
-            Interfaces(Repository & Service Interfaces)
-            DTOs(Data Transfer Objects)
+        subgraph "Core Layer (src/core)"
+            Domain(Domain Entities - domain/)
+            Interfaces(Repository & Service Interfaces - repositories/, services/)
+            DTOs(Data Transfer Objects - use_cases/)
         end
 
-        subgraph "Infrastructure Layer"
-            Persistence(Persistence: SQLAlchemy ORM)
-            Services(Concrete Services: JWT Auth)
-            Migrations(Alembic Migrations)
+        subgraph "Infrastructure Layer (src/infrastructure)"
+            Persistence(Persistence Implementations - persistence/)
+            Services(Concrete Service Implementations - services/)
+            Migrations(Alembic - persistence/alembic/)
         end
 
         subgraph "Database"
-            DB[(PostgreSQL)]
+            DB[(PostgreSQL / SQLite)]
         end
 
         subgraph "Cache (Optional / Future)"
@@ -129,28 +117,27 @@ graph LR
 
     C --> LB --> API
     Routes --> UseCases
-    UseCases --> Interfaces
-    UseCases --> Domain
-    Interfaces -- Implemented by --> Persistence
-    Interfaces -- Implemented by --> Services
-    Persistence --> DB
-    UseCases --> Cache
+    UseCases --> Interfaces(Core)
+    UseCases --> Domain(Core)
+    Interfaces(Core) -- Implemented by --> Persistence(Infrastructure)
+    Interfaces(Core) -- Implemented by --> Services(Infrastructure)
+    Persistence(Infrastructure) --> DB
+    UseCases --> Cache(Infrastructure via Core Interface)
 ```
 
-* **Client:** Any HTTP client interacting with the API.
-* **API Layer (FastAPI):** Handles incoming HTTP requests, authentication, request validation (via Pydantic DTOs), serialization, and calls Application Layer use cases.
-* **Application Layer:** Orchestrates the business logic. Uses repository interfaces to interact with data and domain entities to represent core concepts. Does not depend on specific frameworks or infrastructure details.
-* **Core Layer:** Defines the business rules, entities (plain data structures), and contracts (interfaces/ABCs) for data persistence and external services. Has minimal dependencies.
-* **Infrastructure Layer:** Contains concrete implementations of the interfaces defined in Core. Includes database interaction (SQLAlchemy), external service integrations (JWT library), etc. Depends on Core.
-* **Database (PostgreSQL):** The persistent storage for all application data.
+* **Dependency Rule:** Inner layers (`Core`) do not depend on outer layers (`Application`, `Infrastructure`, `API`). Outer layers depend inwards. `Application` depends on `Core`. `Infrastructure` depends on `Core`. `API` depends on `Application` and `Core` (for DTOs).
 
-### 5. Data Model (Conceptual PostgreSQL)
+**(Design Note on Transaction Table):** For the MVP, we utilize a single `transactions` table to manage transaction requests, their approval status, and the resulting ledger impact (via `balance_before`/`balance_after` fields populated upon approval). This simplifies implementation and querying for common history views within the defined architecture. A more normalized approach (separating transaction logs, immutable ledger entries, and approval workflow into distinct tables) was considered but deferred. This separation could be a future refactoring step if required by scale or evolving requirements, but the current design provides sufficient auditability and functionality for the MVP scope.
+
+### 5. Data Model (Conceptual PostgreSQL v3)
+
+The conceptual SQL schema remains the same as in v3, defining the necessary tables (`families`, `users`, `accounts`, `products`, `transactions`) and their relationships, intended to be implemented via SQLAlchemy models within the Infrastructure layer.
 
 ```sql
 -- Enum Types (Example - actual implementation might vary)
 CREATE TYPE user_role AS ENUM ('PARENT', 'CHILD');
 CREATE TYPE product_type AS ENUM ('EARN', 'SPEND');
-CREATE TYPE transaction_type AS ENUM ('EARN', 'SPEND', 'ADJUSTMENT', 'REVERSAL');
+CREATE TYPE transaction_type AS ENUM ('EARN', 'SPEND', 'ADJUSTMENT', 'REVERSAL', 'TRANSFER');
 CREATE TYPE transaction_status AS ENUM ('PENDING', 'APPROVED', 'REJECTED', 'CANCELLED');
 
 -- Tables
@@ -180,8 +167,8 @@ CREATE TABLE accounts (
     family_id UUID NOT NULL REFERENCES families(id) ON DELETE CASCADE,
     balance NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    CONSTRAINT chk_account_balance CHECK (balance >= 0), -- Optional: Prevent negative balances at DB level? Or handle in logic.
-    CONSTRAINT fk_account_user_is_child CHECK ( (SELECT role FROM users WHERE id = user_id) = 'CHILD' ) -- Ensure account belongs to a child
+    CONSTRAINT chk_account_balance CHECK (balance >= 0),
+    CONSTRAINT fk_account_user_is_child CHECK ( (SELECT role FROM users WHERE id = user_id) = 'CHILD' )
 );
 CREATE INDEX idx_accounts_family_id ON accounts(family_id);
 
@@ -191,104 +178,161 @@ CREATE TABLE products (
     name VARCHAR(255) NOT NULL,
     description TEXT,
     type product_type NOT NULL,
-    amount NUMERIC(10, 2) NOT NULL, -- Always positive; interpretation depends on 'type'
+    amount NUMERIC(10, 2) NOT NULL,
     is_active BOOLEAN NOT NULL DEFAULT TRUE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-     CONSTRAINT chk_product_amount_positive CHECK (amount > 0) -- Ensure amount is positive
+     CONSTRAINT chk_product_amount_positive CHECK (amount > 0)
 );
 CREATE INDEX idx_products_family_id ON products(family_id);
 CREATE INDEX idx_products_is_active ON products(is_active);
 
+-- Updated Transactions Table
 CREATE TABLE transactions (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    account_id UUID NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
-    user_id UUID NOT NULL REFERENCES users(id), -- Child user associated with the account
+    account_id UUID NOT NULL REFERENCES accounts(id) ON DELETE CASCADE, -- Primary account (sender for TRANSFER)
+    related_account_id UUID REFERENCES accounts(id) ON DELETE SET NULL, -- Secondary account (recipient for TRANSFER)
+    user_id UUID NOT NULL REFERENCES users(id), -- User associated with account_id
     family_id UUID NOT NULL REFERENCES families(id) ON DELETE CASCADE,
-    product_id UUID REFERENCES products(id) ON DELETE SET NULL, -- Allow product deletion without losing history
+    product_id UUID REFERENCES products(id) ON DELETE SET NULL,
     type transaction_type NOT NULL,
     status transaction_status NOT NULL,
-    amount NUMERIC(10, 2) NOT NULL, -- Amount of this specific transaction
-    balance_before NUMERIC(12, 2) NOT NULL, -- Balance before txn was approved
-    balance_after NUMERIC(12, 2) NOT NULL, -- Balance after txn was approved
+    amount NUMERIC(10, 2) NOT NULL,
+    balance_before NUMERIC(12, 2), -- Nullable until approved
+    balance_after NUMERIC(12, 2), -- Nullable until approved
+    related_balance_before NUMERIC(12, 2), -- Nullable until approved (for TRANSFER)
+    related_balance_after NUMERIC(12, 2), -- Nullable until approved (for TRANSFER)
     description TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     processed_at TIMESTAMPTZ,
     processed_by_user_id UUID REFERENCES users(id), -- Parent who processed
-    CONSTRAINT fk_processed_by_is_parent CHECK ( processed_by_user_id IS NULL OR (SELECT role FROM users WHERE id = processed_by_user_id) = 'PARENT' )
+    CONSTRAINT fk_processed_by_is_parent CHECK ( processed_by_user_id IS NULL OR (SELECT role FROM users WHERE id = processed_by_user_id) = 'PARENT' ),
+    CONSTRAINT chk_related_account_for_transfer CHECK ( (type = 'TRANSFER' AND related_account_id IS NOT NULL) OR (type != 'TRANSFER' AND related_account_id IS NULL) )
 );
+-- Indexes
 CREATE INDEX idx_transactions_account_id ON transactions(account_id);
+CREATE INDEX idx_transactions_related_account_id ON transactions(related_account_id);
 CREATE INDEX idx_transactions_family_id ON transactions(family_id);
 CREATE INDEX idx_transactions_status ON transactions(status);
 CREATE INDEX idx_transactions_type ON transactions(type);
 CREATE INDEX idx_transactions_created_at ON transactions(created_at);
 CREATE INDEX idx_transactions_product_id ON transactions(product_id);
-
--- Trigger for updated_at timestamps (Example)
--- CREATE OR REPLACE FUNCTION trigger_set_timestamp() ...
-
--- CREATE TRIGGER set_timestamp BEFORE UPDATE ON accounts FOR EACH ROW EXECUTE PROCEDURE trigger_set_timestamp();
--- CREATE TRIGGER set_timestamp BEFORE UPDATE ON products FOR EACH ROW EXECUTE PROCEDURE trigger_set_timestamp();
 ```
-
-*(Note: `gen_random_uuid()` requires `pgcrypto` extension or use built-in `uuid_generate_v4()`)*
-*(Note: Balance updates and `balance_before`/`balance_after` population should be handled carefully within application logic/database transactions to ensure accuracy)*
 
 ### 6. Clean Architecture & Code Structure (Python/FastAPI)
 
-We will adhere to the previously defined Clean Architecture structure:
+This project will strictly adhere to the following Clean Architecture structure, separating interfaces from implementations:
 
 ```
 /family-bank-api
-├── src/
-│   ├── core/                 # Interfaces, Domain Entities, DTOs
-│   │   ├── domain/           # family.py, user.py, account.py, product.py, transaction.py, common_enums.py
-│   │   ├── repositories/     # Abstractions: family_repo.py, user_repo.py, account_repo.py, etc. (ABC)
-│   │   ├── use_cases/        # DTOs: family_dtos.py, user_dtos.py, product_dtos.py, etc. (Pydantic)
-│   │   └── services/         # Abstractions: auth_service.py (ABC)
+├── src/                      # Main source directory
 │   │
-│   ├── infrastructure/       # Concrete Implementations
-│   │   ├── persistence/
-│   │   │   └── sqlalchemy/   # models.py (SQLAlchemy Tables), repos/ (Implementations), db.py (Session management)
-│   │   │   └── alembic/      # Database migration scripts
-│   │   └── services/
-│   │       └── jwt/          # auth_service.py (JWT Implementation)
+│   ├── core/                 # === Contracts & Core Domain ===
+│   │   ├── __init__.py
+│   │   ├── domain/           # Domain Models/Entities (Plain Classes/Dataclasses)
+│   │   │   ├── __init__.py
+│   │   │   ├── common_enums.py # UserRole, ProductType, TransactionType, TransactionStatus
+│   │   │   ├── family.py
+│   │   │   ├── user.py
+│   │   │   ├── account.py
+│   │   │   ├── product.py
+│   │   │   └── transaction.py
+│   │   ├── repositories/     # Abstract Repository Interfaces (using abc.ABC)
+│   │   │   ├── __init__.py
+│   │   │   ├── base_repo.py  # Optional: Base interface with common methods (get_by_id, save)
+│   │   │   ├── family_repo.py
+│   │   │   ├── user_repo.py
+│   │   │   ├── account_repo.py
+│   │   │   ├── product_repo.py
+│   │   │   └── transaction_repo.py
+│   │   ├── use_cases/        # Use Case DTOs (Pydantic Models)
+│   │   │   ├── __init__.py
+│   │   │   ├── family_dtos.py
+│   │   │   ├── user_dtos.py
+│   │   │   ├── account_dtos.py
+│   │   │   ├── product_dtos.py
+│   │   │   └── transaction_dtos.py
+│   │   └── services/         # Abstract External Service Interfaces (using abc.ABC)
+│   │       ├── __init__.py
+│   │       └── auth_service.py # Defines abstract class AuthService(ABC)
+│   │       # Add cache_service.py, notification_service.py here if needed later
 │   │
-│   ├── application/          # Use Case Implementation / Business Logic
-│   │   └── use_cases/        # family_uc.py, user_uc.py, product_uc.py, transaction_uc.py
+│   ├── infrastructure/       # === Concrete Implementations ===
+│   │   ├── __init__.py
+│   │   ├── persistence/      # Data Persistence Implementations
+│   │   │   ├── __init__.py
+│   │   │   ├── sqlalchemy/   # SQLAlchemy Implementation
+│   │   │   │   ├── __init__.py
+│   │   │   │   ├── models.py    # SQLAlchemy declarative models (maps to domain entities)
+│   │   │   │   ├── repos/       # Directory for concrete repo implementations
+│   │   │   │   │   ├── __init__.py
+│   │   │   │   │   ├── family_repo.py # Implements core.repositories.FamilyRepository
+│   │   │   │   │   ├── user_repo.py
+│   │   │   │   │   ├── account_repo.py
+│   │   │   │   │   ├── product_repo.py
+│   │   │   │   │   └── transaction_repo.py
+│   │   │   │   └── db.py        # Session management, engine setup
+│   │   │   └── alembic/      # Database migration scripts (using Alembic)
+│   │   │       ├── versions/
+│   │   │       ├── env.py
+│   │   │       └── script.py.mako
+│   │   └── services/         # External Service Implementations
+│   │       ├── __init__.py
+│   │       └── jwt/          # JWT Implementation
+│   │           ├── __init__.py
+│   │           └── auth_service.py # Implements core.services.AuthService
+│   │       # Add redis/ cache_service.py etc. here if needed
 │   │
-│   ├── api/                  # FastAPI Web Layer
-│   │   ├── main.py           # FastAPI App instance, DI wiring, middleware setup
-│   │   ├── routes/           # auth_routes.py, family_routes.py, user_routes.py, etc.
-│   │   ├── middleware/       # auth_middleware.py
-│   │   └── dependencies.py   # Common dependencies (get_db, get_current_user)
+│   ├── application/          # === Application Logic (Use Case Implementations) ===
+│   │   ├── __init__.py
+│   │   └── use_cases/
+│   │       ├── __init__.py
+│   │       ├── family_uc.py    # Implements Family Use Cases
+│   │       ├── user_uc.py      # Implements User Use Cases
+│   │       ├── account_uc.py   # Implements Account Use Cases (e.g., balance checks)
+│   │       ├── product_uc.py   # Implements Product Use Cases
+│   │       └── transaction_uc.py # Implements Transaction Use Cases (Request, Approve, Reject, etc.)
 │   │
-│   └── config.py             # Settings management (Pydantic BaseSettings)
+│   ├── api/                  # === Web Layer & Wiring ===
+│   │   ├── __init__.py
+│   │   ├── main.py           # FastAPI app instance, DI wiring, middleware setup, startup/shutdown events
+│   │   ├── routes/           # API Route definitions using APIRouter
+│   │   │   ├── __init__.py
+│   │   │   ├── auth_routes.py
+│   │   │   ├── family_routes.py
+│   │   │   ├── user_routes.py
+│   │   │   ├── product_routes.py
+│   │   │   └── transaction_routes.py
+│   │   ├── middleware/       # API Middleware implementations
+│   │   │   ├── __init__.py
+│   │   │   └── auth_middleware.py # Authentication middleware using AuthService interface
+│   │   └── dependencies.py   # FastAPI dependencies (e.g., get_db_session, get_current_user)
+│   │
+│   └── config.py             # Configuration loading (Pydantic BaseSettings)
 │
-├── tests/                    # Unit, Integration, E2E Tests
+├── tests/                    # Tests directory mirroring src structure
+│   ├── __init__.py
 │   ├── core/
 │   ├── infrastructure/
 │   ├── application/
 │   └── api/
-├── .env                      # Environment variables
+├── .env                      # Environment variables file (loaded by config.py)
 ├── .gitignore
-├── pyproject.toml            # Project metadata and dependencies (Poetry/PDM)
+├── pyproject.toml            # Project definition, dependencies (Poetry)
 └── README.md
 ```
-
-* **Dependency Rule:** `API` -> `Application` -> `Core` <- `Infrastructure`. `Core` has minimal dependencies. `Infrastructure` implements `Core` interfaces. `Application` uses `Core` interfaces. `API` calls `Application` use cases.
 
 ### 7. Technology Stack (MVP)
 
 * **Language:** Python 3.11+
 * **Web Framework:** FastAPI
 * **Data Validation:** Pydantic v2
-* **Database:** PostgreSQL 15+
+* **Database:** PostgreSQL 15+ (Recommended). SQLAlchemy allows for using SQLite for initial development/testing if preferred, but PostgreSQL is the target for production.
 * **ORM:** SQLAlchemy 2.0+ (Core & ORM)
 * **Migrations:** Alembic
 * **Authentication:** JWT (`python-jose`, `passlib[bcrypt]`)
-* **Async Driver (DB):** `asyncpg` (for FastAPI/SQLAlchemy async)
-* **Caching:** Redis (Optional - Deferred beyond MVP)
+* **Async Driver (DB):** `asyncpg` (for FastAPI/SQLAlchemy async with PostgreSQL)
+* **Caching:** Redis (Optional - Deferred beyond MVP, requires defining `CacheService` in Core and implementing in Infrastructure)
 * **Containerization:** Docker, Docker Compose
 * **Dependency Management:** Poetry
 * **Testing:** `pytest`, `pytest-asyncio`, `httpx`, `factory-boy`, `pytest-cov`
